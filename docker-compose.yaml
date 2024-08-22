@@ -1,0 +1,238 @@
+version: '3.9'
+services:
+    zipkin-service:
+        image : openzipkin/zipkin
+        container_name: zipkin
+        networks:
+         - default
+        ports:
+            - "9411:9411"
+    loki-service:
+        image : grafana/loki
+        container_name: loki
+        networks:
+         - default
+        ports:
+            - "3100:3100"
+    kafka-service:
+        image : apache/kafka
+        container_name: kafka-broker
+        networks:
+         - default
+        ports:
+            - "9092:9092"
+        environment:
+            KAFKA_NODE_ID: 1
+            KAFKA_PROCESS_ROLES: broker,controller
+            KAFKA_LISTENERS: PLAINTEXT://kafka-service:9092,CONTROLLER://kafka-service:9093
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-service:9092
+            KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+            KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-service:9093
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+            KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0             
+    postgres-service:
+        image : postgres
+        container_name: postgres-database
+        networks:
+         - default
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_PASSWORD: password
+    config-server:
+        image : config-server-app
+        container_name: config-server
+        networks:
+         - default
+        ports:
+            - "8711:8711"
+        depends_on:
+            zipkin-service:
+                condition: service_healthy     
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka/
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans            
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8711/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    eureka-server:
+        image : eureka-server-app
+        container_name: eureka-server
+        networks:
+         - default
+        ports:
+           - "8712:8712"
+        depends_on:
+            config-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8712/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    gateway-server:
+        image : gateway-server-app
+        container_name: gateway-server
+        networks:
+         - default
+        ports:
+            - "8713:8713"
+        depends_on:
+            eureka-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8713/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    customer-service:
+        image : customer-service-app
+        container_name: customer-service
+        networks:
+         - default
+        ports:
+            - "8082:8082"
+        depends_on:
+            gateway-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            GATEWAY_BASE_URL: http://gateway-server:8713
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            POSTGRES_HOSTNAME: postgres-service
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8082/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    payment-service:
+        image : payment-service-app
+        container_name: payment-service
+        networks:
+         - default
+        ports:
+            - "8084:8084"
+        depends_on:
+            gateway-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            GATEWAY_BASE_URL: http://gateway-server:8713
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            POSTGRES_HOSTNAME: postgres-service
+            KAFKA_HOSTNAME: kafka-service
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8084/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    product-catalog-service:
+        image : product-catalog-app
+        container_name: product-catalog-service
+        networks:
+         - default
+        ports:
+            - "8089:8089"
+        depends_on:
+            gateway-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            GATEWAY_BASE_URL: http://gateway-server:8713
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            POSTGRES_HOSTNAME: postgres-service
+            KAFKA_HOSTNAME: kafka-service
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8089/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    order-processing-service:
+        image : order-processing-app
+        container_name: order-processing-service
+        networks:
+         - default
+        ports:
+            - "8099:8099"
+        depends_on:
+            gateway-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            GATEWAY_BASE_URL: http://gateway-server:8713
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            POSTGRES_HOSTNAME: postgres-service
+            KAFKA_HOSTNAME: kafka-service
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8099/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
+    inventory-service:
+        image : inventory-service-app
+        container_name: inventory-service
+        networks:
+         - default
+        ports:
+            - "8199:8199"
+        depends_on:
+            gateway-server:
+                condition: service_healthy
+        environment:
+            ZIPKIN_BASE_URL: http://zipkin-service:9411
+            CONFIG_SERVER_URL: http://config-server:8711
+            EUREKA_BASE_URL: http://eureka-server:8712/eureka
+            GATEWAY_BASE_URL: http://gateway-server:8713
+            OTLP_TRACING_ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            MANAGEMENT.ZIPKIN.TRACING.ENDPOINT: http://zipkin-service:9411/api/v2/spans
+            POSTGRES_HOSTNAME: postgres-service
+            KAFKA_HOSTNAME: kafka-service
+            SPRING_PROFILES_ACTIVE: dev
+        healthcheck:
+         test: ["CMD", "wget", "--spider", "http://localhost:8199/actuator/health"]
+         interval: 50s
+         timeout: 10s
+         retries: 3
+         start_period: 10s
